@@ -1,6 +1,0 @@
-The following file is the output of Optical Character Recognition of a scanned book. 
-However, it is very messy. Your task is to format it as the markdown file format. 
-Please remove page numbering. Also note that many books repeat the title/chapter and author on every page, and this might be erroneously repeated in the text. 
-If so, do not mistake it for a header, and remove it! If there are mistaken characters in the text, do your best guess at error correcting. 
-Please format the document with headers, with chapter titles as H1 (# Chapter), and paragraph titles as H2 (##). 
-If you encounter an image caption, add a <missing image> tag before the caption.
