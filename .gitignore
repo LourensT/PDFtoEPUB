@@ -3,6 +3,7 @@ env/
 tests/
 __pycache__/
 temp/
+tmp/
 books/
 *.pdf
 *.epub
