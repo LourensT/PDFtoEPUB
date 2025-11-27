@@ -1,289 +1,212 @@
-from typing import Tuple, Dict
-
-from openai import OpenAI
-import tiktoken
-import pdf2image
-from pypdf import PdfReader
-
+import argparse
+import base64
+import json
 import logging
 import os
-import json
-import base64
-import argparse
+import subprocess
 from pathlib import Path
+from typing import Dict
+
+import pdf2image
+import yaml
+from mistralai import Mistral
+from mistralai.extra import response_format_from_pydantic_model
+from pypdf import PdfReader
+
+from models.metadata import EPUBMetadata
+
+api_key = os.environ["MISTRAL_API_KEY"]
+mistral = Mistral(api_key=api_key)
 
 
-def encode_image(image_path: str) -> str:
-    with open(image_path, "rb") as image_file:
-        return base64.b64encode(image_file.read()).decode("utf-8")
+def main(pdf_fp: str, output_fp: str) -> None:
+    """
+    Convert a scanned PDF to epub
+    """
+    # set new logging file
+    assert ".pdf" in pdf_fp, "The input file must be a PDF file."
+    assert ".epub" in output_fp, "The output file must be an EPUB file"
+
+    pdf_fp = Path(pdf_fp)
+    output_fp = Path(output_fp)
+
+    check_pandoc_installed()
+
+    temp_dir = Path(__file__).parent / "tmp" / pdf_fp.stem
+    if not temp_dir.exists():
+        temp_dir.mkdir(parents=True, exist_ok=True)
+
+    # set logging
+    logging_file = f"{pdf_fp.stem}.log"
+    i = 0
+    while (temp_dir / logging_file).exists():
+        logging_file = f"{pdf_fp.stem}_{i}.log"
+        i += 1
+    logging_path = temp_dir / logging_file
+    logging.basicConfig(filename=logging_path, level=logging.INFO)
+
+
+    # make output_fp
+    output_fp = Path(output_fp)
+    if not output_fp.parent.exists():
+        output_fp.parent.mkdir(parents=True, exist_ok=True)
+        logging.info("Made output dir", output_fp.parent)
+
+    # how long is the book?
+    length_of_book = get_num_pages(pdf_fp)
+    logging.info(f"Number of pages: {length_of_book}")
+
+    # get metadata from book
+    metadata_yaml_fp = pdf_to_metadata(pdf_fp, temp_dir) # stores temp_dir/metadata.yaml
+
+    # do ocr
+    # md_path = pdf_to_markdown(pdf_fp, temp_dir) # stores md and images in temp_dir
+    md_path = temp_dir / "forbiddendoor.md"
+
+    # create epub using pandoc
+    markdown_to_epub(md_path, output_fp, metadata_yaml_fp)
+
+
+def check_pandoc_installed():
+    """
+    Checks if pandoc is installed
+    """
+    output = subprocess.run(["pandoc", "--version"], capture_output=True, text=True)
+    assert output.stdout[:6] == "pandoc", f"pandoc appears not to be installed, `pandoc --version` gave {output.stdout}"
+
 
 def get_num_pages(pdf_file: Path) -> int:
     reader = PdfReader(pdf_file)
     return len(reader.pages)
 
-def main(pdf_fp: str, output_fp: str, temp_dir: str = "temp/") -> None:
+
+def get_first_page_as_image(pdf_file: Path) -> bytes:
     """
-    Convert a scanned PDF afile to text.
+    Use pdf2image to get the first page of the pdf as an image in bytes
     """
-    # set new logging file
-    assert ".pdf" in pdf_fp, "The input file must be a PDF file."
-
-    length_of_book = get_num_pages(pdf_fp)
-    logging.info(f"Number of pages: {length_of_book}")
-
-    if not os.path.exists(temp_dir):
-        os.makedirs(temp_dir)
-
-    with open(output_fp, "w") as f:
-        f.write("")
-
-    # set logging
-    filename_root = f"{pdf_fp.split('/')[-1].split('.')[0]}_to_{output_fp.split('/')[-1].split('.')[0]}"
-    filename = f"{temp_dir}{filename_root}"
-    i = 0
-    while os.path.exists(f"{filename}.log"):
-        filename = f"{filename_root}_{i}"
-        i += 1
-    filename = f"{filename}.log"
-    logging.basicConfig(filename=filename, level=logging.INFO)
+    images = pdf2image.convert_from_path(pdf_file, first_page=1, last_page=1)
+    return images[0]
 
 
-    # store all the images in a temp directory
-    bookname = Path(pdf_fp).stem
-    img_temp_dir = f"{temp_dir}/{bookname}/"
-    if not os.path.exists(img_temp_dir):
-        os.makedirs(img_temp_dir)
+def encode_pdf_b64(pdf_path: str) -> str:
+    with open(pdf_path, "rb") as pdf_file:
+        return base64.b64encode(pdf_file.read()).decode('utf-8')
 
-    # number of files in temp_dir
-    num_temp_img = len([name for name in os.listdir(img_temp_dir) if os.path.isfile(os.path.join(img_temp_dir, name))])
 
-    if length_of_book != num_temp_img:
-        print("saving all pages as img")
-        # convert the pdf to images
-        images = pdf2image.convert_from_path(pdf_fp)
-        for i, image in enumerate(images):
-            image.save(f'{img_temp_dir}{i}.png', 'PNG')
-
-    # initialize the OCR reader
-    ocr = OCR()
-
-    # initialize the context at the start
-    context = {
-        "book_title": "Unknown",
-        "author": "Unknown",
-        "current_chapter": "Unknown",
-    }
-
-    for i in range(length_of_book):
-        print(f"Processing page {i + 1}/{length_of_book}")
-        markdown, context = ocr.process_page(f'{img_temp_dir}{i}.png', context)
-        logging.info(f"Page {i + 1}/{length_of_book} processed. Deduced context {context}")
-
-        if len(markdown) != 0:
-            if markdown[0] == "#":
-                markdown = "\n" + markdown
-            markdown = "\n" + markdown
-
-            with open(output_fp, "a") as f:
-                f.write(markdown)
-
-    sent, received, image_cost = ocr.cost_est()
-    logging.info(f"Total cost: {sent + received + image_cost} USD")
-
-class OCR:
+def pdf_to_markdown(pdf_fp: Path, output_dir: Path):
     """
-    Uses OpenAI API to convert the data to markdown format.
+    Convert a scanned PDF file to markdown text and save it to the output directory.
+     
+    Args:
+        pdf_fp (Path): The path to the scanned PDF file.
+        output_dir (Path): The directory to save the output markdown file and images.
     """
-    MODEL = 'gpt-5-mini'
-    schema = {
-        "type": "object",
-        "title": "markdown and context",
-        "additionalProperties": False,
-        "required": ["markdown", "context_from_previous_pages"],
-        "properties": {
-            "markdown": {
-                "type": "string",
-                "description": "The markdown-formatted text"
-            },
-            "context_from_previous_pages": {
-                "type": "object",
-                "title": "context",
-                "description": "Information about the position of the text in the document",
-                "additionalProperties": False,
-                "required": ["book_title", "author", "current_chapter"],
-                "properties": {
-                    "book_title": {
-                        "type": "string",
-                        "description": "The book title",
-                    },
-                    "author": {
-                        "type": "string",
-                        "description": "The author of the book",
-                    },
-                    "current_chapter": {
-                        "type": "string",
-                        "description": "The chapter title",
-                    }
-                }
-            }
-        }
-    }
 
-    def __init__(self):
-        self.encoding = tiktoken.encoding_for_model(self.MODEL)
+    # raise NotImplementedError("This function is not implemented yet.")
 
-        self.tokens_sent = 0
-        self.tokens_received = 0
-        self.images_sent = 0
 
-        self.client = OpenAI()
+    base64_pdf = encode_pdf_b64(pdf_fp)
 
-        # load the prompt instruction
-        with open("img_instruction.txt", "r") as f:
-            self.img_instruction = f.read()
-        with open("txt_instruction.txt", "r") as f:
-            self.txt_instruction = f.read()
+    ocr_response = mistral.ocr.process(
+        model="mistral-ocr-latest",
+        document={
+            "type": "document_url",
+            "document_url": f"data:application/pdf;base64,{base64_pdf}" 
+        },
+        include_image_base64=True,
+    )
 
-    def process_page(self, scan_fp: str, context: dict) -> Tuple[str, Dict]:
-        """
-        Process a single page.
+    all_mkdwn = ""
+    for page in ocr_response.pages:
 
-        :param scan_fp: The file path to the scanned image.
-        """
+        if len(page.markdown) == 0:
+            continue
 
-        base64_image = encode_image(scan_fp)
-        try:
-            resp = self.with_gpt_ocr(base64_image, prev_page_content=context)
-        except json.decoder.JSONDecodeError:
-            logging.debug("Error in OpenAI response, possibly the content violates their content policy, using local OCR.")
-            resp = self.with_local_ocr(scan_fp)
+        if page.markdown.startswith("#"):
+            all_mkdwn = all_mkdwn + "\n\n" + page.markdown
+        else:
+            all_mkdwn = all_mkdwn + "\n" + page.markdown
 
-        markdown = resp["markdown"]
-        context = resp["context_from_previous_pages"]
-        context["ending_last_page"] = markdown[-min(len(markdown), 200):]
+        # store any images
+        for image in page.images:
+            image_string = image.image_base64.split(",")[-1]
+            image_data = base64.b64decode(image_string)
 
-        return markdown, context
+            image_path = output_dir / image.id
+            with open(image_path, "wb") as img_file:
+                img_file.write(image_data)
 
-    def with_gpt_ocr(self, base64_img: str, prev_page_content: Dict[str, str]) -> Tuple[str, Dict]:
-        """
-        Format the data into markdown format using OpenAI API.
+    with (output_dir / pdf_fp.stem).open("w") as f:
+        f.write(all_mkdwn)
 
-        :param base64_img: The base64 encoded image.
-        :param prev_page_content: The context from previous pages.
-        """
-        messages = [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": self.img_instruction},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{base64_img}",
-                            }
-                        }
-                    ],
-                }
-            ]
 
-        if 'ending_last_page' in prev_page_content:
-            messages[0]['content'].append({"type": "text", "text": f"The last page ended with: {prev_page_content.pop('ending_last_page')}"})
+def pdf_to_metadata(pdf_fp: Path, output_dir: Path) -> Path:
+    """
+    Extract metadata from a scanned PDF file using OCR.
+    Stores metadata as .yaml in TEMP_DIR
+    Also saves cover as image in TEMP_DIR
 
-        messages[0]['content'].append({"type": "text", "text": f"context_from_previous_pages: {str(prev_page_content)}"})
+    Args:
+        pdf_fp (Path): The path to the scanned PDF file.
+    
+    Return: 
+        path to metadata yaml à la https://pandoc.org/demo/example33/11.1-epub-metadata.html 
+    """
+    # store cover
+    logging.info("Saving first page as cover")
+    cover = get_first_page_as_image(pdf_fp)
+    # save in temp
+    cover.save(output_dir / "cover.png")
 
-        response = self.client.chat.completions.create(
-            model="gpt-4o-2024-08-06",
-            n=1,
-            temperature=0,
-            messages=messages,
-            response_format={"type": "json_schema", "json_schema": {"strict": True, "name": "markdown", "schema": self.schema}},
-        )
+    metadata = metadata_annotation(pdf_fp)
 
-        self.tokens_sent += response.usage.prompt_tokens
-        self.tokens_received += response.usage.completion_tokens
-        self.images_sent
+    metadata["cover-image"] = str(output_dir / "cover.png")
 
-        result = json.loads(response.choices[0].message.content)
+    # save in temp
+    logging.info("Saving metadata.yaml")
+    with open(output_dir / "metadata.yaml", "w") as f:
+        yaml.dump(metadata, f)
 
-        logging.info(f"with_gpt_ocr gave result: {result}")
+    return output_dir / "metadata.yaml"
 
-        return result
 
-    def with_local_ocr(self, scan_fp: str, prev_page_content: Dict[str, str]) -> Tuple[str, Dict]:
-        """
-        Format the data into markdown format using pytesseract, and error correction using OpenAI API.
+def metadata_annotation(pdf_fp: Path) -> Dict:
+    base64_pdf = encode_pdf_b64(pdf_fp)
 
-        :param scan_fp: The file path to the scanned image.
-        :param prev_page_content: The context from previous pages.
+    annotation_response = mistral.ocr.process(
+        model="mistral-ocr-latest",
+        pages=list(range(8)), # only take first 8 pages
+        document={
+            "type": "document_url",
+            "document_url": f"data:application/pdf;base64,{base64_pdf}" 
+        },
+        document_annotation_format=response_format_from_pydantic_model(EPUBMetadata),
+        include_image_base64=False
+    )
 
-        :throws ImportError: If pytesseract is not installed.
-        """
-        try:
-            import pytesseract
-        except ImportError:
-            raise ImportError("OpenAI refused OCR for a page. Please install pytesseract using `pip install pytesseract` to do the OCR locally.")
+    return json.loads(annotation_response.document_annotation)
 
-        block = pytesseract.image_to_string(scan_fp)
 
-        messages = [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": self.txt_instruction},
-                        {
-                            "type": "text",
-                            "text": block,
-                        }
-                    ],
-                }
-            ]
+def markdown_to_epub(markdown_fp: Path, output_fp: Path, metadata_yaml_fp: Path = None ) -> None:
+    """
+    Convert a markdown file to an EPUB file using pandoc.
 
-        if 'ending_last_page' in prev_page_content:
-            messages[0]['content'].append({"type": "text", "text": f"The last page ended with: {prev_page_content.pop('ending_last_page')}"})
+    Args:
+        markdown_fp (Path): The path to the markdown file.
+        output_fp (Path): The path to save the output EPUB file.
+        metadata_yaml_fp (Path): The path to the metadata YAML file.
+    """
+    logging.info(f"Using pandoc to convert {markdown_fp} into {output_fp}")
+    assert markdown_fp.exists(), "did not find markdown file"
 
-        messages[0]['content'].append({"type": "text", "text": f"context_from_previous_pages: {str(prev_page_content)}"})
+    if not metadata_yaml_fp:
+        output = subprocess.run(["pandoc", str(markdown_fp), "-o", str(output_fp)], capture_output=True, text=True)
+    else:
+        output = subprocess.run(["pandoc", str(markdown_fp), "-o", str(output_fp), "--metadata-file", str(metadata_yaml_fp)], capture_output=True, text=True)
 
-        response = self.client.chat.completions.create(
-            model="gpt-4o-2024-08-06",
-            n=1,
-            temperature=0,
-            messages=messages,
-            response_format={"type": "json_schema", "json_schema": {"strict": True, "name": "markdown", "schema": self.schema}},
-        )
-
-        self.tokens_sent += response.usage.prompt_tokens
-        self.tokens_received += response.usage.completion_tokens
-
-        try:
-            result = json.loads(response.choices[0].message.content)
-        except json.decoder.JSONDecodeError:
-            logging.error("Error in OpenAI response, possibly the content violates their content policy, no error correction done.")
-            result = {"markdown": block, "context_from_previous_pages": prev_page_content}
-
-        logging.info(f"with_local_ocr gave result: {result}")
-
-        return result
-
-    def cost_est(self) -> Tuple[float, float, float]:
-        # source: https://community.openai.com/t/proposal-introducing-an-api-endpoint-for-token-count-and-cost-estimation/664585
-        # updated on 12 sept 2024
-
-        # {model : [dollar_per_1m_sent_tokens, dollar_per_1m_received_tokens, price_per 1000 x 1600 picture ]}
-        pricing = {
-            "gpt-4o": [5, 15, 0.001913],
-            "gpt-5-mini": [0.25, 2, 0.0001913],
-        }
-
-        if self.MODEL not in pricing:
-            print(f"Cost estimation not available for model {self.MODEL}.")
-            return 0.0, 0.0, 0.0
-
-        sent_cost = self.tokens_sent * pricing[self.MODEL][0] / 1_000_000
-        received_cost = self.tokens_received * pricing[self.MODEL][1] / 1_000_000
-        image_cost = self.images_sent * pricing[self.MODEL][2]
-
-        return sent_cost, received_cost, image_cost
-
+    if len(output.stdout) != 0:
+        logging.error(f"Pandoc: {output.stdout}")
+    
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Convert a scanned PDF file to text.')
@@ -292,9 +215,5 @@ if __name__ == '__main__':
     # output file
     parser.add_argument('output_fp', type=str, help='The output file to save the text to.')
 
-    # optional arguments
-    # different temp directory
-    parser.add_argument('--temp_dir', type=str, help='The temporary directory to store the images.', default='temp/')
-
     args = parser.parse_args()
-    main(args.pdf_fp, args.output_fp, temp_dir=args.temp_dir)
+    main(args.pdf_fp, args.output_fp)

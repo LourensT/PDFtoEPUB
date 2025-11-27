@@ -1,9 +1,8 @@
-env/
 .env
-tests/
+.venv
 __pycache__/
-temp/
+tmp/
 books/
 *.pdf
 *.epub
-.DS_Store
+*.DS_Store
