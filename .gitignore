@@ -3,3 +3,7 @@ env/
 tests/
 __pycache__/
 temp/
+books/
+*.pdf
+*.epub
+.DS_Store

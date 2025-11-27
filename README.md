@@ -2,11 +2,10 @@
 Uses GPT to convert a scanned PDF to an epub. The main motivation is to be able to read books on an e-reader, and to be able to search and highlight text.
 This is called "OCR" (Optical Character Recognition), and it is a common problem in computer vision. The main challenge is that the text is not in a structured format, but rather in an image.
 
-Project is currently in a stage where I use it for myself. The API costs are pretty bad, like a $1 per hundred pages (October 2024). 
-So should be negligible cheap in a year or two :)
+Project is currently in a stage where I use it for myself. The API costs are pretty bad, like a $1 per hundred pages depending on image (November 2025). 
 
 ## Approach
-Do OCR with GPT-4, with a bit of prompt engineering:
+Do OCR with GPT-5-mini, with a bit of prompt engineering:
 1. Page-by-page OCR (image to markdown)
     * pass along an object with context deduced from the previous pages. Specifically:
         * The book title
@@ -24,9 +23,9 @@ Do OCR with GPT-4, with a bit of prompt engineering:
 
     `pip install -r requirements.txt`
 
-2. Install pandoc
-    1. download the amd64 .deb from https://github.com/jgm/pandoc/releases/
-    2. `sudo dpkg -i $DEB` where `$DEB` is the downloaded file
+2. Install pandoc for writing epubs
+    1. download from https://github.com/jgm/pandoc/releases/
+
 3. Create `.env` file with `OPENAI_API_KEY=yourkey`
 
 4. **Optional** Install tesseract engine from https://tesseract-ocr.github.io/tessdoc/Installation.html. 

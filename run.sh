@@ -5,8 +5,8 @@ fpmd=$(echo $1 | sed 's/.pdf/.md/g')
 ofepub=$(echo $1 | sed 's/.pdf/.epub/g')
 # print the file paths
 echo converting $1 to markdown $fpmd
-#activate pythnon venv
-source env/bin/activate
+# activate python venv
+source .venv/bin/activate
 # set environment variables from .env
 export $(cat .env | xargs)
 # run conversion to markdown

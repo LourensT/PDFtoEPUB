@@ -3,25 +3,33 @@ from typing import Tuple, Dict
 from openai import OpenAI
 import tiktoken
 import pdf2image
+from pypdf import PdfReader
 
 import logging
 import os
 import json
 import base64
 import argparse
+from pathlib import Path
 
 
 def encode_image(image_path: str) -> str:
     with open(image_path, "rb") as image_file:
         return base64.b64encode(image_file.read()).decode("utf-8")
 
+def get_num_pages(pdf_file: Path) -> int:
+    reader = PdfReader(pdf_file)
+    return len(reader.pages)
 
-def main(pdf_fp: str, output_fp: str, store_temp: bool = False, temp_dir: str = "temp/") -> None:
+def main(pdf_fp: str, output_fp: str, temp_dir: str = "temp/") -> None:
     """
     Convert a scanned PDF afile to text.
     """
     # set new logging file
     assert ".pdf" in pdf_fp, "The input file must be a PDF file."
+
+    length_of_book = get_num_pages(pdf_fp)
+    logging.info(f"Number of pages: {length_of_book}")
 
     if not os.path.exists(temp_dir):
         os.makedirs(temp_dir)
@@ -31,7 +39,7 @@ def main(pdf_fp: str, output_fp: str, store_temp: bool = False, temp_dir: str = 
 
     # set logging
     filename_root = f"{pdf_fp.split('/')[-1].split('.')[0]}_to_{output_fp.split('/')[-1].split('.')[0]}"
-    filename = f"{filename_root}"
+    filename = f"{temp_dir}{filename_root}"
     i = 0
     while os.path.exists(f"{filename}.log"):
         filename = f"{filename_root}_{i}"
@@ -39,10 +47,24 @@ def main(pdf_fp: str, output_fp: str, store_temp: bool = False, temp_dir: str = 
     filename = f"{filename}.log"
     logging.basicConfig(filename=filename, level=logging.INFO)
 
-    # convert the pdf to images
-    images = pdf2image.convert_from_path(pdf_fp)
 
-    # initialize the OCR object
+    # store all the images in a temp directory
+    bookname = Path(pdf_fp).stem
+    img_temp_dir = f"{temp_dir}/{bookname}/"
+    if not os.path.exists(img_temp_dir):
+        os.makedirs(img_temp_dir)
+
+    # number of files in temp_dir
+    num_temp_img = len([name for name in os.listdir(img_temp_dir) if os.path.isfile(os.path.join(img_temp_dir, name))])
+
+    if length_of_book != num_temp_img:
+        print("saving all pages as img")
+        # convert the pdf to images
+        images = pdf2image.convert_from_path(pdf_fp)
+        for i, image in enumerate(images):
+            image.save(f'{img_temp_dir}{i}.png', 'PNG')
+
+    # initialize the OCR reader
     ocr = OCR()
 
     # initialize the context at the start
@@ -52,39 +74,27 @@ def main(pdf_fp: str, output_fp: str, store_temp: bool = False, temp_dir: str = 
         "current_chapter": "Unknown",
     }
 
-    number_of_pages = len(images)
-    logging.info(f"Number of pages: {number_of_pages}")
+    for i in range(length_of_book):
+        print(f"Processing page {i + 1}/{length_of_book}")
+        markdown, context = ocr.process_page(f'{img_temp_dir}{i}.png', context)
+        logging.info(f"Page {i + 1}/{length_of_book} processed. Deduced context {context}")
 
-    for i, image in enumerate(images):
-        print(f"Processing page {i + 1}/{number_of_pages}")
-        image.save(f'{temp_dir}{i}.png', 'PNG')
-        # TODO pass this directly instead of saving first
-        markdown, context = ocr.process_page(f'{temp_dir}{i}.png', context)
-        logging.info(f"Page {i + 1}/{number_of_pages} processed. Deduced context {context}")
-
-        if markdown[0] == "#":
+        if len(markdown) != 0:
+            if markdown[0] == "#":
+                markdown = "\n" + markdown
             markdown = "\n" + markdown
-        markdown = "\n" + markdown
 
-        with open(output_fp, "a") as f:
-            f.write(markdown)
+            with open(output_fp, "a") as f:
+                f.write(markdown)
 
     sent, received, image_cost = ocr.cost_est()
     logging.info(f"Total cost: {sent + received + image_cost} USD")
-
-    if not store_temp:
-        for i in range(len(images)):
-            os.remove(f"{temp_dir}{i}.png")
-
-        # remove the temp directory
-        os.rmdir(temp_dir)
-
 
 class OCR:
     """
     Uses OpenAI API to convert the data to markdown format.
     """
-    MODEL = 'gpt-4o'
+    MODEL = 'gpt-5-mini'
     schema = {
         "type": "object",
         "title": "markdown and context",
@@ -258,10 +268,15 @@ class OCR:
         # source: https://community.openai.com/t/proposal-introducing-an-api-endpoint-for-token-count-and-cost-estimation/664585
         # updated on 12 sept 2024
 
-        # {model : [dollar_per_1m_sent_tokens, dollar_per_1m_received_tokens, price_per 1000 x 10000 picture ]}
+        # {model : [dollar_per_1m_sent_tokens, dollar_per_1m_received_tokens, price_per 1000 x 1600 picture ]}
         pricing = {
             "gpt-4o": [5, 15, 0.001913],
+            "gpt-5-mini": [0.25, 2, 0.0001913],
         }
+
+        if self.MODEL not in pricing:
+            print(f"Cost estimation not available for model {self.MODEL}.")
+            return 0.0, 0.0, 0.0
 
         sent_cost = self.tokens_sent * pricing[self.MODEL][0] / 1_000_000
         received_cost = self.tokens_received * pricing[self.MODEL][1] / 1_000_000
@@ -278,10 +293,8 @@ if __name__ == '__main__':
     parser.add_argument('output_fp', type=str, help='The output file to save the text to.')
 
     # optional arguments
-    # store temp, default false
-    parser.add_argument('--store_temp', action='store_true', help='Store temporary files.')
     # different temp directory
     parser.add_argument('--temp_dir', type=str, help='The temporary directory to store the images.', default='temp/')
 
     args = parser.parse_args()
-    main(args.pdf_fp, args.output_fp, store_temp=args.store_temp, temp_dir=args.temp_dir)
+    main(args.pdf_fp, args.output_fp, temp_dir=args.temp_dir)

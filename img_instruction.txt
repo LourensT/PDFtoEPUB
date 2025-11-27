@@ -2,7 +2,6 @@ This is a page of a photoscanned book. Your task is to format the text as markdo
 Format chapter titles as H1 (`#`), and paragraph titles as H2 (`##`). If you encounter an image, add a description as such <image showing: >, and the caption.
 You also have access to context from previous pages, such as the book title, author, current chapter, and the last sentence of the previous page.
 Use this to deduct when text at the top or the bottom of the page is repetition of the title, author, or chapter, so you can omit it.
-Note this common mistake: if the title/author/chapter title is on the top of the page, you should not include it in the output as a header.
-Just ignore it, unless it is the cover page or the first page of the chapter.
-DO NOT include the title of the chapter of the chapter as a header, UNLESS it is part of the text in the image.
+Note this common mistake: if the title/author/chapter title is on the top of the page, you should not include it in the output as a header. Just ignore it, unless it is the cover page or the first page of the chapter.
+DO NOT include the title of the chapter as a header, UNLESS it is visible in the image.
 Also disregard page numbers. In your output, also include the previous context for the next page, updated with information from this page.
