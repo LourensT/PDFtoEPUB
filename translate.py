@@ -1,17 +1,16 @@
-import os
-from mistralai import Mistral, SystemMessage, UserMessage
-from mistralai.extra import response_format_from_pydantic_model
-from pathlib import Path
-
-import logging
 import asyncio
 import json
-import yaml
+import logging
+import os
+from pathlib import Path
 
-from models.metadata import EPUBMetadata
+import yaml
+from dotenv import load_dotenv
+from mistralai import Mistral, SystemMessage, UserMessage
+from mistralai.extra import response_format_from_pydantic_model
+
 from models.translation import MarkdownTranslation
 
-from dotenv import load_dotenv
 load_dotenv()
 
 API_KEY = os.environ["MISTRAL_API_KEY"]
