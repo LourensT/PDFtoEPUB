@@ -28,23 +28,64 @@ def translate_metadata(metadata_yaml_fp: Path, target_language: str) -> Path:
     with metadata_yaml_fp.open("r", encoding="utf-8") as f:
         metadata = yaml.safe_load(f)
     
+    translatable_metadata = {}
+    if 'title' in metadata:
+        if isinstance(metadata["title"], list):
+            for item in metadata["title"]:
+                if isinstance(item, dict):
+                    translatable_metadata.setdefault("title", []).append({"text": item.get("text", "")})
+                else:
+                    translatable_metadata.setdefault("title", []).append(item)
+        else:
+            translatable_metadata["title"] = metadata["title"]
+    if 'description' in metadata:
+        translatable_metadata["description"] = metadata["description"]
+    
     messages = [
-        SystemMessage(content=f"You are a helpful assistant that translates book metadata to {target_language}."),
-        UserMessage(content=f"Of the following JSON, translate the translatable values to {target_language}. IGNORE the 'type' fields: \n\n {json.dumps(metadata, indent=2)}"),
+        SystemMessage(content=f"You are a helpful assistant that translates JSONS to {target_language}."),
+        UserMessage(content=f"Of the following JSON, translate the translatable values (NOT KEYS) to {target_language}: \n\n {json.dumps(translatable_metadata, indent=2)}"),
     ]
 
     res = mistral.chat.complete(
         model="mistral-small-latest",
         messages=messages,
-        response_format=response_format_from_pydantic_model(EPUBMetadata),
         stream=False,
-        temperature=0,
+        response_format = {
+            "type": "json_object",
+        }
     )
 
-    translated_metadata = res.choices[0].message.content
+    translated_metadata = json.loads(res.choices[0].message.content)
+
+    # merge translated fields back into original metadata
+    if "title" in translated_metadata:
+        if isinstance(metadata["title"], list):
+            for i, item in enumerate(translated_metadata["title"]):
+                if isinstance(item, dict):
+                    metadata["title"][i]["text"] = item.get("text", "")
+                else:
+                    metadata["title"][i] = item
+        else:
+            metadata["title"] = translated_metadata["title"]
+    if "description" in translated_metadata:
+        metadata["description"] = translated_metadata["description"]
+    
+    # add the automated translation note to the creators
+    # 1. check if there's already a translator
+    if "creator" not in metadata:
+        metadata['creator'] = []
+    if not isinstance(metadata['creator'], list):
+        metadata['creator'] = [{"role": "author", "text": metadata['creator']}]
+
+    new_translator = {
+        "role": "translator",
+        "text": f"Automated translation to {target_language}"
+    } 
+    metadata['creator'].append(new_translator)
+
     output_fp = metadata_yaml_fp.parent / f"metadata_translated_{target_language}.yaml"
     with open(output_fp, "w", encoding="utf-8") as f:
-        yaml.dump(json.loads(translated_metadata), f)
+        yaml.dump(metadata, f)
     
     return output_fp
 
