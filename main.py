@@ -63,12 +63,10 @@ def main(pdf_fp: str, output_fp: str, translate_to: str = None) -> None:
     logging.info(f"Number of pages: {length_of_book}")
 
     # get metadata from book
-    # metadata_yaml_fp = pdf_to_metadata(pdf_fp, temp_dir) # stores temp_dir/metadata.yaml
-    metadata_yaml_fp = temp_dir / "metadata.yaml"
+    metadata_yaml_fp = pdf_to_metadata(pdf_fp, temp_dir) # stores temp_dir/metadata.yaml
 
     # OCR
-    # md_path = pdf_to_markdown(pdf_fp, temp_dir) # stores md and images in temp_dir
-    md_path = temp_dir / f"{pdf_fp.stem}.md"
+    md_path = pdf_to_markdown(pdf_fp, temp_dir) # stores md and images in temp_dir
 
     if translate_to:
         logging.info(f"Translating to {translate_to}")
