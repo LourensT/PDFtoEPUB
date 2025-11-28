@@ -63,17 +63,17 @@ def main(pdf_fp: str, output_fp: str, translate_to: str = None) -> None:
     logging.info(f"Number of pages: {length_of_book}")
 
     # get metadata from book
-    metadata_yaml_fp = pdf_to_metadata(pdf_fp, temp_dir) # stores temp_dir/metadata.yaml
+    # metadata_yaml_fp = pdf_to_metadata(pdf_fp, temp_dir) # stores temp_dir/metadata.yaml
+    metadata_yaml_fp = temp_dir / "metadata.yaml"
 
     # OCR
     # md_path = pdf_to_markdown(pdf_fp, temp_dir) # stores md and images in temp_dir
-    md_path = temp_dir / "forbiddendoor.md"
+    md_path = temp_dir / f"{pdf_fp.stem}.md"
 
     if translate_to:
         logging.info(f"Translating to {translate_to}")
         metadata_yaml_fp = translate_metadata(metadata_yaml_fp, translate_to)
-        # md_path = translate_markdown(md_path, temp_dir, translate_to)
-        md_path = temp_dir / f"forbiddendoor_translated_{translate_to}.md"
+        md_path = translate_markdown(md_path, temp_dir, translate_to)
 
     # create epub using pandoc
     markdown_to_epub(md_path, output_fp, metadata_yaml_fp)
@@ -148,8 +148,10 @@ def pdf_to_markdown(pdf_fp: Path, output_dir: Path):
             with open(image_path, "wb") as img_file:
                 img_file.write(image_data)
 
-    with (output_dir / pdf_fp.stem).open("w") as f:
+    with (output_dir / f"{pdf_fp.stem}.md").open("w") as f:
         f.write(all_mkdwn)
+
+    return output_dir / f"{pdf_fp.stem}.md"
 
 
 def pdf_to_metadata(pdf_fp: Path, output_dir: Path) -> Path:
@@ -211,11 +213,12 @@ def markdown_to_epub(markdown_fp: Path, output_fp: Path, metadata_yaml_fp: Path 
     logging.info(f"Using pandoc to convert {markdown_fp} into {output_fp}")
     assert markdown_fp.exists(), "did not find markdown file"
 
-    if not metadata_yaml_fp:
-        output = subprocess.run(["pandoc", str(markdown_fp), "-o", str(output_fp)], capture_output=True, text=True)
-    else:
-        output = subprocess.run(["pandoc", str(markdown_fp), "-o", str(output_fp), "--metadata-file", str(metadata_yaml_fp)], capture_output=True, text=True)
+    command = ["pandoc", str(markdown_fp), "-o", str(output_fp), "--resource-path", str(markdown_fp.parent)]
 
+    if metadata_yaml_fp:
+        command.extend(["--metadata-file", str(metadata_yaml_fp)])
+
+    output = subprocess.run(command, capture_output=True, text=True)
     if len(output.stdout) != 0:
         logging.error(f"Pandoc: {output.stdout}")
     
