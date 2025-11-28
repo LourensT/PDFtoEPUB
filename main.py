@@ -1,3 +1,6 @@
+from models.metadata import EPUBMetadata
+from translate import translate_markdown, translate_metadata
+
 import argparse
 import base64
 import json
@@ -9,17 +12,17 @@ from typing import Dict
 
 import pdf2image
 import yaml
+from dotenv import load_dotenv
 from mistralai import Mistral
 from mistralai.extra import response_format_from_pydantic_model
 from pypdf import PdfReader
 
-from models.metadata import EPUBMetadata
-
+load_dotenv()
 api_key = os.environ["MISTRAL_API_KEY"]
 mistral = Mistral(api_key=api_key)
 
 
-def main(pdf_fp: str, output_fp: str) -> None:
+def main(pdf_fp: str, output_fp: str, translate_to: str = None) -> None:
     """
     Convert a scanned PDF to epub
     """
@@ -30,11 +33,14 @@ def main(pdf_fp: str, output_fp: str) -> None:
     pdf_fp = Path(pdf_fp)
     output_fp = Path(output_fp)
 
+    logging.info(f"Starting conversion of {pdf_fp} to {output_fp}")
+
     check_pandoc_installed()
 
     temp_dir = Path(__file__).parent / "tmp" / pdf_fp.stem
     if not temp_dir.exists():
         temp_dir.mkdir(parents=True, exist_ok=True)
+
 
     # set logging
     logging_file = f"{pdf_fp.stem}.log"
@@ -59,9 +65,15 @@ def main(pdf_fp: str, output_fp: str) -> None:
     # get metadata from book
     metadata_yaml_fp = pdf_to_metadata(pdf_fp, temp_dir) # stores temp_dir/metadata.yaml
 
-    # do ocr
+    # OCR
     # md_path = pdf_to_markdown(pdf_fp, temp_dir) # stores md and images in temp_dir
     md_path = temp_dir / "forbiddendoor.md"
+
+    if translate_to:
+        logging.info(f"Translating to {translate_to}")
+        metadata_yaml_fp = translate_metadata(metadata_yaml_fp, translate_to)
+        # md_path = translate_markdown(md_path, temp_dir, translate_to)
+        md_path = temp_dir / f"forbiddendoor_translated_{translate_to}.md"
 
     # create epub using pandoc
     markdown_to_epub(md_path, output_fp, metadata_yaml_fp)
@@ -214,6 +226,8 @@ if __name__ == '__main__':
     parser.add_argument('pdf_fp', type=str, help='The scanned PDF file to convert to text.')
     # output file
     parser.add_argument('output_fp', type=str, help='The output file to save the text to.')
+    # optional: translate to language
+    parser.add_argument('--translate_to', type=str, help='The language to translate the text to.', default=None)
 
     args = parser.parse_args()
-    main(args.pdf_fp, args.output_fp)
+    main(args.pdf_fp, args.output_fp, args.translate_to)
